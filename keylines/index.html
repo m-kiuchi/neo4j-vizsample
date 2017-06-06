@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+    <html lang="en">
+        <!--//
+            // Neo4j - KeyLines 可視化サンプル
+            //
+            //  Mitsutoshi Kiuchi<m-kiuchi@creationline.com>
+            //-->
+    <head>
+        <meta charset="utf-8">
+        <title>Neo4j Visualization demo using KeyLines</title>
+        <!-- UI用に Twitter Bootstrapを使用 -->
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+        <!-- KeyLines 読み込み -->
+        <link rel="stylesheet" type="text/css" href="css/keylines.css">
+        <script src="js/keylines.js"  type="text/javascript"></script>
+        <!-- Neo4j Driver -->
+        <script src="../../node_modules/neo4j-driver/lib/browser/neo4j-web.js"></script>
+    </head>
+    <body>
+        <div class="container-fluid">
+            <h1>Neo4j KeyLines可視化デモ</h1>
+            <div class="row">
+                <div class="input-group">
+                    <input class="form-control input-lg" type="text" value="MATCH (a)-[r]-(b) WHERE a.name = 'Tom Hanks' RETURN a,r,b" id="example-query-input">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-success btn-lg" onclick="executeQuery()">実行</button>
+                    </span>
+                </div>
+            </div>
+            <!-- 結果を描画するコンテナ -->
+            <div id="kl" style="height:600px;"></div>
+        </div>
+        <script type="text/javascript">
+
+            function buildGraph(graph, path){
+                //
+                // Neo4jのクエリ結果を見て、グラフデータをアップデートする関数
+                //
+                for (idx in path) {
+                    objid = parseInt(path[idx].identity.low)+1;
+                    
+                    // Node か Relationshipかを判断してグラフデータの更新方法を変える。
+                    // 本当はもっとちゃんとした判別方法があるはず・・・
+                    if(idx != 1) {
+                        // Nodeの場合
+                        //
+
+                        // 重複チェック。既に登録したノードだったらスキップする
+                        var ndupflg = false;
+                        for (nidx in graph.nodes) {
+                            if(graph.nodes[nidx].objid == objid) {
+                                //console.log("dup");
+                                ndupflg = true;
+                            }
+                        }
+                        if(ndupflg) { continue; }
+
+                        nname = path[idx].properties.name
+                        if(nname == undefined) {
+                            nname = path[idx].properties.title;
+                        }
+
+                        graph.nodes.push({ "id": objid,
+                                           "objid": objid,
+                                           "label": path[idx].labels[0],
+                                           "c": "#cee1ff",
+                                           "b": "#9dbae8",
+                                           "t": nname,
+                                           "type": "node"
+                                         });
+                    }else{
+                        // Relationshipの場合
+                        //
+
+                        // 重複チェック。既に登録したリレーションシップの場合はスキップする
+                        var ldupflg = false;
+                        for (nidx in graph.edges) {
+                            if(graph.edges[nidx].objid == objid) {
+                                console.log("dup");
+                                ldupflg = true;
+                            }
+                        }
+                        if(ldupflg) { continue; }
+
+                        graph.edges.push({ "id": "l" + objid.toString(),
+                                           "id1": parseInt(path[parseInt(idx) - 1].identity.low)+1,
+                                           "id2": parseInt(path[parseInt(idx) + 1].identity.low)+1,
+                                           "a2": true,
+                                           "objid": objid,
+                                           "label": path[idx].type,
+                                           "t": path[idx].type,
+                                           "w": 1,
+                                           "type": 'link'
+                                          });
+                    }
+                }
+                // 更新したグラフデータを返却する
+                return(graph);
+            }
+
+            function chartLoaded(err, components, graph) {
+                //
+                // 与えられたグラフデータを元にKeyLinesで描画する
+                //
+                console.log("chartLoaded");
+                console.log(err);
+                console.log(components);
+                console.log(graph);
+                var items = [];
+                for(i in graph.nodes){
+                    items.push(graph.nodes[i]);
+                }
+                for(j in graph.edges){
+                    items.push(graph.edges[j]);
+                }
+                components.load({
+                    'type': 'LinkChart',
+                    items: items
+                }, function() {
+                    components.layout("standard", function(){});
+                });
+            }
+            
+            //
+            // ここがメインルーチン
+            // Neo4jにクエリを実行し、結果を取得
+            //
+            function executeQuery() {
+                // Neo4j Volt Driverの初期化
+                var neo = neo4j.default;
+                var driver = neo.driver("bolt://localhost", neo.auth.basic("neo4j", "1234"));
+                var session = driver.session();
+                // KeyLines 内部で使用するグラフデータの初期化
+                var graph = {"nodes": [], "edges": []};
+
+                // Neo4jクエリの実行
+                var queryStr = document.getElementById("example-query-input").value;
+                console.log(queryStr);
+                session.run(queryStr)
+                .subscribe({
+                    onNext: function(record){
+                        // クエリ結果1行ごとに buildGraph関数を呼び出し、グラフデータを更新する
+                        //console.log(record.get('a'), record.get('r'), record.get('b'));
+                        graph = buildGraph(graph, [record.get('a'), record.get('r'), record.get('b')])
+                    },
+                    onCompleted: function(){
+                        // クエリ結果の取得が完了したら、Neo4jセッションを終了して
+                        // KeyLinesの描画を開始する
+                        session.close();
+                        console.log(graph);
+
+                        var chartOptions = {
+                            overview: false,
+                            selectionColour: 'rgba(255, 255, 255, 0)',
+                            handMode: true,
+                            dragPan: false,
+                            logo: 'images/neo4jug.png',
+                            hover: 300,
+                            truncateLabels: { maxLength: 20 }
+                        };
+                        KeyLines.create({
+                            id: 'kl', type: 'chart', options: chartOptions
+                        }, function(err, result){
+                            chartLoaded(err, result, graph);
+                        });
+                    },
+                    onError: function(error) {
+                        console.log("Error: ",error);
+                    }
+                });
+            }
+            
+
+        </script>
+    </body>
+</html>

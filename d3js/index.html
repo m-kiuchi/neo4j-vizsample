@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+    <html lang="en">
+        <!--//
+            // Neo4j - D3.js 可視化サンプル
+            //
+            //  Mitsutoshi Kiuchi<m-kiuchi@creationline.com>
+            //  Prerequisite:
+            //    $ npm install neo4j-driver
+            //-->
+    <head>
+        <meta charset="utf-8">
+        <title>Neo4j Visualization demo using D3.js</title>
+        <!-- UI用に Twitter Bootstrapを使用 -->
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+        <!-- D3.js はCDNから読み込み -->
+        <script src="https://d3js.org/d3.v4.min.js"></script>
+        <!-- Neo4j Driver -->
+        <script src="../../node_modules/neo4j-driver/lib/browser/neo4j-web.js"></script>
+    </head>
+    <body>
+        <div class="container-fluid">
+            <h1>Neo4j D3.js可視化デモ</h1>
+            <div class="row">
+                <div class="input-group">
+                    <input class="form-control input-lg" type="text" value="MATCH (a)-[r]-(b) WHERE a.name = 'Tom Hanks' RETURN a,r,b" id="example-query-input">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-success btn-lg" onclick="executeQuery()">実行</button>
+                    </span>
+                </div>
+            </div>
+            <!-- 結果を描画するcanvas -->
+            <canvas width="960" height="600"></canvas>
+        </div>
+        <script type="text/javascript">
+
+            
+            function buildGraph(graph, path){
+                //
+                // Neo4jのクエリ結果を見て、グラフデータをアップデートする関数
+                //
+                for (idx in path) {
+                    objid = parseInt(path[idx].identity.low)+1;
+                    
+                    // Node か Relationshipかを判断してグラフデータの更新方法を変える。
+                    // 本当はもっとちゃんとした判別方法があるはず・・・
+                    if(idx != 1) {
+                        // Nodeの場合
+                        //
+
+                        // 重複チェック。既に登録したノードだったらスキップする
+                        var ndupflg = false;
+                        for (nidx in graph.nodes) {
+                            if(graph.nodes[nidx].objid == objid) {
+                                //console.log("dup");
+                                ndupflg = true;
+                            }
+                        }
+                        if(ndupflg) { continue; }
+
+                        nname = path[idx].properties.name
+                        if(nname == undefined) {
+                            nname = path[idx].properties.title;
+                        }
+
+                        graph.nodes.push({"id": objid,
+                                          "objid": objid,
+                                          "nlabel": nname,
+                                          "label": path[idx].labels[0],
+                                          "size": 35});
+                    }else{
+                        // Relationshipの場合
+                        //
+
+                        // 重複チェック。既に登録したリレーションシップの場合はスキップする
+                        var ldupflg = false;
+                        for (nidx in graph.links) {
+                            if(graph.links[nidx].objid == objid) {
+                                console.log("dup");
+                                ldupflg = true;
+                            }
+                        }
+                        if(ldupflg) { continue; }
+
+                        graph.links.push({"source": parseInt(path[parseInt(idx) - 1].identity.low)+1,
+                                          "target": parseInt(path[parseInt(idx) + 1].identity.low)+1,
+                                          "objid": objid,
+                                          "label": path[idx].type,
+                                          "distance": 5});
+                    }
+                }
+                // 更新したグラフデータを返却する
+                return(graph);
+            }
+
+
+            function drawGraph(graph) {
+                //
+                // 与えられたグラフデータを元にD3.jsで描画する
+                //
+
+                var canvas = document.querySelector("canvas"),
+                    context = canvas.getContext("2d"),
+                    width = canvas.width,
+                    height = canvas.height;
+                var color = {
+                    "nodeborder": "#6da0f2",
+                    "nodefill": "#cee1ff",
+                    "nodetext": "#6da0f2",
+                    "link": "#aaa"
+                };
+                // D3.jsのforceモジュールを使用して、オブジェクトの自動配置、コリジョン検知を行う
+                // D3.js version3 と version4では書式が変わっているので注意。(この例はversion4)
+                //   Collision Detectionの例: https://bl.ocks.org/mbostock/31ce330646fa8bcb7289ff3b97aab3f5
+                //   forceLinkの例: https://bl.ocks.org/shimizu/e6209de87cdddde38dadbb746feaf3a3
+                const simulation = d3.forceSimulation(graph.nodes)
+                              // ノード間のリンクの距離を指定
+                              .force("link", d3.forceLink().id(function(d){ return d.id; })
+                                                           .distance(function(d){ return d.distance*40; })
+                                                           .strength(1))
+                              // ノードの散らばり具合を指定。プラスにするとよりくっつく。マイナスにするとよりバラける
+                              .force("charge", d3.forceManyBody().strength(-400))
+                              // Collisionの指定。どの程度までノードが近づいたらよけようとするかを指定
+                              .force("collide", d3.forceCollide().radius(function(d){ return d.size*1.4; }))
+                              // グラフ全体の中心を指定
+                              .force("centering", d3.forceCenter(width / 2, height / 2));
+                // forceモジュールにnodeを指定。
+                // tickハンドラはレイアウトが変更された時に発火して、指定された関数(この例ではticked)を実行する
+                simulation.nodes(graph.nodes)
+                          .on("tick", ticked);
+                // forceモジュールにlinkを指定
+                simulation.force("link").links(graph.links);
+
+                d3.select(canvas)
+                  .call(d3.drag()
+                          .container(canvas)
+                         .subject(dragsubject)
+                          .on("start", dragstarted)
+                          .on("drag", dragged)
+                          .on("end", dragended));
+
+                function dragsubject() {
+                    return simulation.find(d3.event.x, d3.event.y);
+                }
+
+                function dragstarted() {
+                    if (!d3.event.active) simulation.alphaTarget(0.3).restart();
+                    d3.event.subject.fx = d3.event.subject.x;
+                    d3.event.subject.fy = d3.event.subject.y;
+                }
+
+                function dragged() {
+                    d3.event.subject.fx = d3.event.x;
+                    d3.event.subject.fy = d3.event.y;
+                }
+
+                function dragended() {
+                    if (!d3.event.active) simulation.alphaTarget(0);
+                    d3.event.subject.fx = null;
+                    d3.event.subject.fy = null;
+                }
+
+                function ticked() {
+                    context.clearRect(0, 0, width, height);
+                    
+                    context.beginPath();
+                    graph.links.forEach(drawLink);
+                    
+                    context.beginPath();
+                    graph.nodes.forEach(drawNode);
+
+                    context.beginPath();
+                    graph.nodes.forEach(drawName);
+
+                }
+
+                function drawLink(d) {
+                    context.moveTo(d.source.x, d.source.y);
+                    context.lineTo(d.target.x, d.target.y);
+                    context.strokeStyle = color.link;
+                    context.stroke();
+                }
+
+                function drawName(d) {
+                    context.moveTo(d.x, d.y);
+                    context.fillStyle = color.nodetext;
+                    context.font = (d.size*0.5).toString() + "px Arial";
+                    context.fillText(d.nlabel, d.x-d.size, d.y);
+                }
+
+                function drawNode(d) {
+                    context.moveTo(d.x + 3, d.y);
+                    context.arc(d.x, d.y, d.size, 0, 2 * Math.PI);
+                    context.strokeStyle = color.nodeborder;
+                    context.lineWidth = 5;
+                    context.stroke();
+                    context.fillStyle = color.nodefill;
+                    context.fill();
+                }                
+            }
+            
+            //
+            // ここがメインルーチン
+            // Neo4jにクエリを実行し、結果を取得
+            //
+            function executeQuery() {
+                // Neo4j Volt Driverの初期化
+                var neo = neo4j.default;
+                var driver = neo.driver("bolt://localhost", neo.auth.basic("neo4j", "1234"));
+                var session = driver.session();
+                // D3.js 内部で使用するグラフデータの初期化
+                var graph = {"nodes": [], "links": []};
+
+                // Neo4jクエリの実行
+                var queryStr = document.getElementById("example-query-input").value;
+                console.log(queryStr);
+                session.run(queryStr)
+                .subscribe({
+                    onNext: function(record){
+                        // クエリ結果1行ごとに buildGraph関数を呼び出し、グラフデータを更新する
+                        //console.log(record.get('a'), record.get('r'), record.get('b'));
+                        graph = buildGraph(graph, [record.get('a'), record.get('r'), record.get('b')])
+                    },
+                    onCompleted: function(){
+                        // クエリ結果の取得が完了したら、Neo4jセッションを終了して
+                        // D3.jsの描画を開始する
+                        session.close();
+                        console.log(graph);
+                        drawGraph(graph);
+                    },
+                    onError: function(error) {
+                        console.log("Error: ",error);
+                    }
+                });
+            }
+            
+
+        </script>
+    </body>
+</html>

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+    <html lang="en">
+        <!--//
+            // Neo4j - sigma.js 可視化サンプル
+            //
+            //  Mitsutoshi Kiuchi<m-kiuchi@creationline.com>
+            //-->
+    <head>
+        <meta charset="utf-8">
+        <title>Neo4j Visualization demo using sigma.js</title>
+        <!-- UI用に Twitter Bootstrapを使用 -->
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+        <!-- sigma.js はCDNから読み込み -->
+        <!--
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/1.2.0/sigma.require.js" integrity="sha256-PaiGeuSVrwWY1F9yt2vgUcZHpBFtJm2zokbF5Vrj3oM=" crossorigin="anonymous"></script>
+        -->
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/1.2.0/sigma.min.js" integrity="sha256-SRRubnX77KKxTl1/uluP1zGweVqx3pTO7aEaTecZB4g=" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/1.2.0/plugins/sigma.layout.forceAtlas2.min.js" integrity="sha256-4db1UeOZltwcQuCk6NSC5DejShYyjcWolY5OyQLtAvg=" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/1.2.0/plugins/sigma.plugins.dragNodes.min.js" integrity="sha256-GsCqmXw81h5Ng+assIZ4VhMuj6k28nUGboGTL/MHaQU=" crossorigin="anonymous"></script>
+        <!-- sigma.js にはNeo4jプラグインもあるので、同様にCDNから読み込み -->
+        <!--
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/sigma.js/1.2.0/plugins/sigma.neo4j.cypher.min.js" integrity="sha256-UDUSwcQ0w3eGFUTCpIdrior1Pfqaw6+AcS52+CJWZuI=" crossorigin="anonymous"></script>
+        -->
+        <!-- Neo4j Driver -->
+        <script src="../../node_modules/neo4j-driver/lib/browser/neo4j-web.js"></script>
+    </head>
+    <body>
+        <div class="container-fluid">
+            <h1>Neo4j sigma.js可視化デモ</h1>
+            <div class="row">
+                <div class="input-group">
+                    <input class="form-control input-lg" type="text" value="MATCH (a)-[r]-(b) WHERE a.name = 'Tom Hanks' RETURN a,r,b" id="example-query-input">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-success btn-lg" onclick="executeQuery()">実行</button>
+                    </span>
+                </div>
+            </div>
+            <!-- 結果を描画するコンテナ -->
+            <div id="sigcontainer" style="height:600px;"></div>
+        </div>
+        <script type="text/javascript">
+
+            
+            function buildGraph(graph, path){
+                //
+                // Neo4jのクエリ結果を見て、グラフデータをアップデートする関数
+                //
+                for (idx in path) {
+                    objid = parseInt(path[idx].identity.low)+1;
+                    
+                    // Node か Relationshipかを判断してグラフデータの更新方法を変える。
+                    // 本当はもっとちゃんとした判別方法があるはず・・・
+                    if(idx != 1) {
+                        // Nodeの場合
+                        //
+
+                        // 重複チェック。既に登録したノードだったらスキップする
+                        var ndupflg = false;
+                        for (nidx in graph.nodes) {
+                            if(graph.nodes[nidx].objid == objid) {
+                                //console.log("dup");
+                                ndupflg = true;
+                            }
+                        }
+                        if(ndupflg) { continue; }
+
+                        nname = path[idx].properties.name
+                        if(nname == undefined) {
+                            nname = path[idx].properties.title;
+                        }
+
+                        graph.nodes.push({ "id": objid,
+                                           "objid": objid,
+                                           "labelname": path[idx].labels[0],
+                                           "label": nname,
+                                           "x": Math.random(),
+                                           "y": Math.random(),
+                                           "size": 35,
+                                           "color": "#cee1ff"
+                                         });
+                    }else{
+                        // Relationshipの場合
+                        //
+
+                        // 重複チェック。既に登録したリレーションシップの場合はスキップする
+                        var ldupflg = false;
+                        for (nidx in graph.edges) {
+                            if(graph.edges[nidx].objid == objid) {
+                                console.log("dup");
+                                ldupflg = true;
+                            }
+                        }
+                        if(ldupflg) { continue; }
+
+                        graph.edges.push({ "id": objid,
+                                           "source": parseInt(path[parseInt(idx) - 1].identity.low)+1,
+                                           "target": parseInt(path[parseInt(idx) + 1].identity.low)+1,
+                                           "objid": objid,
+                                           "label": path[idx].type,
+                                           "size": 1,
+                                           "color": '#ddd',
+                                           "type": "arrow",
+                                           "distance": 5
+                                          });
+                    }
+                }
+                // 更新したグラフデータを返却する
+                return(graph);
+            }
+
+
+            function drawGraph(graph) {
+                //
+                // 与えられたグラフデータを元にsigma.jsで描画する
+                //
+                s = new sigma({
+                    graph: graph,
+                    container: 'sigcontainer'
+                });
+
+                //
+                // 両方の機能を有効にするとバッティングして動きが
+                // おかしくなる。どっちか一方であればOK
+                //
+                //s.startForceAtlas2({worker: true, barnesHutOptimize: false, strongGravityMode: true});
+                var dragListener = sigma.plugins.dragNodes(s, s.renderers[0]);
+
+            }
+            
+            //
+            // ここがメインルーチン
+            // Neo4jにクエリを実行し、結果を取得
+            //
+            function executeQuery() {
+                // Neo4j Volt Driverの初期化
+                var neo = neo4j.default;
+                var driver = neo.driver("bolt://localhost", neo.auth.basic("neo4j", "1234"));
+                var session = driver.session();
+                // sigma.js 内部で使用するグラフデータの初期化
+                var graph = {"nodes": [], "edges": []};
+
+                // Neo4jクエリの実行
+                var queryStr = document.getElementById("example-query-input").value;
+                console.log(queryStr);
+                session.run(queryStr)
+                .subscribe({
+                    onNext: function(record){
+                        // クエリ結果1行ごとに buildGraph関数を呼び出し、グラフデータを更新する
+                        //console.log(record.get('a'), record.get('r'), record.get('b'));
+                        graph = buildGraph(graph, [record.get('a'), record.get('r'), record.get('b')])
+                    },
+                    onCompleted: function(){
+                        // クエリ結果の取得が完了したら、Neo4jセッションを終了して
+                        // sigma.jsの描画を開始する
+                        session.close();
+                        console.log(graph);
+                        //rootNode = graph.nodes[0].id;
+                        drawGraph(graph);
+                    },
+                    onError: function(error) {
+                        console.log("Error: ",error);
+                    }
+                });
+            }
+            
+
+        </script>
+    </body>
+</html>
